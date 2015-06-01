@@ -93,37 +93,32 @@ mod rq {
     //pub fn random_quote(recall: &Recall) -> Option<Grab> {
     pub fn random_quote(sql: &Awake) -> Option<Grab> {
 
+        // TODO: save this preparation
+        let recall = sql.prepare(
+                "SELECT nick, added_by, added_at, quote FROM quotegrabs
+                 OFFSET random() * (SELECT COUNT(*) FROM quotegrabs) LIMIT 1").unwrap();
 
         let attempt = || -> postgres::Result<Option<Grab>> {
-
-            let recall = sql.prepare(
-                    "SELECT nick, added_by, added_at, quote FROM quotegrabs
-                     OFFSET random() * (SELECT COUNT(*) FROM quotegrabs) LIMIT 1").unwrap();
-
             let rows = try!(recall.query(&[]));
-            Ok(match rows.iter().next() {
-                Some(row) => {
-                    // use MAP
-                    Some(Grab {
-                        nick: row.get(0),
-                        added_by: row.get(1),
-                        added_at: row.get(2),
-                        quote: row.get(3),
-                    })
+            Ok(rows.iter().next().map(|row| {
+                Grab {
+                    nick: row.get(0),
+                    added_by: row.get(1),
+                    added_at: row.get(2),
+                    quote: row.get(3),
                 }
-                None => None
-            })
+            }))
         };
 
-        let mut complained = false;
         let tries = 3;
-        for _attempt in 0..tries {
+        let mut complained = false;
+        for _ in 0..tries {
             match attempt() {
                 Ok(Some(grab)) => return Some(grab),
                 Ok(None)       => (),
                 Err(e)         => {
-                    complained = true;
-                    println!("random_quote: {}", e)
+                    println!("random_quote: {}", e);
+                    complained = true
                 }
             }
         }
@@ -143,8 +138,7 @@ struct Brain {
 impl Brain {
     pub fn load() -> Brain {
         use postgres::{Connection, SslMode};
-        let url = env::var("DATABASE_URL").unwrap();
-        //.ok().expect("Missing Postgres DATABASE_URL env var!");
+        let url = env::var("DATABASE_URL").ok().expect("Missing DATABASE_URL");
         let sql = Connection::connect(&url[..], &SslMode::None).unwrap();
 
         //let rq = rq::prepare(sql).unwrap();
