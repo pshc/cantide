@@ -151,6 +151,7 @@ impl Brain {
 
 fn main() {
     let host = "irc.opera.com";
+    let channel = env::var("IRC_CHANNEL").ok().expect("Missing IRC_CHANNEL");
     println!("Connecting to {}...", host);
 
     let brain = Brain::load();
@@ -160,7 +161,7 @@ fn main() {
             nickname: Some("cantide".to_string()),
             alt_nicks: Some(vec!["canti".to_string()]),
             server: Some(host.to_string()),
-            channels: Some(vec!["#uweng".to_string()]),
+            channels: Some(vec![channel]),
             .. Default::default()
         };
         let server = IrcServer::from_config(config).unwrap();
