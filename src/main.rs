@@ -160,7 +160,7 @@ fn main() {
             nickname: Some("cantide".to_string()),
             alt_nicks: Some(vec!["canti".to_string()]),
             server: Some(host.to_string()),
-            channels: Some(vec!["#testbot".to_string()]),
+            channels: Some(vec!["#uweng".to_string()]),
             .. Default::default()
         };
         let server = IrcServer::from_config(config).unwrap();
