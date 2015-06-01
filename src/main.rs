@@ -1,18 +1,31 @@
+extern crate chrono;
 extern crate irc;
-extern crate rusqlite;
+extern crate postgres;
 
+use std::env;
 use std::default::Default;
 use irc::client::prelude::*;
+use irc::client::server::NetIrcServer;
 
 struct Cantide {
-    nick: String,
+    brain: Brain,
     channel: String,
+    irc: NetIrcServer,
+    _nick: String,
 }
 
 impl Cantide {
-    fn handle(&mut self, msg: Message) {
-        if msg.command == "PING" {
-            return
+    pub fn serve(&self) {
+        for msg in self.irc.iter() {
+            self.handle(msg.unwrap())
+        }
+    }
+
+    pub fn handle(&self, msg: Message) {
+        match &msg.command[..] {
+            "PING" => return,
+            "353" | "366" => return,
+            _ => ()
         }
 
         let nick = match msg.get_source_nickname() {
@@ -27,53 +40,95 @@ impl Cantide {
                              msg.suffix.is_some();
         if is_normal_chat {
             let text = msg.suffix.unwrap();
-            println!("<{}> {}", nick, text)
+            println!("<{}> {}", nick, text);
+            if let Some(reply) = self.dispatch(&text) {
+                let cmd = Command::PRIVMSG(self.channel.clone(), reply);
+                self.irc.send(cmd).unwrap();
+            }
         }
         else {
             println!("{:?}", msg)
         }
     }
+
+    // maybe this ought to just return a &'a str... or call a closure or something?
+    fn dispatch(&self, text: &str) -> Option<String> {
+        if text.trim() == "!rq" {
+            let quote = rq::random_quote(&self.brain.sql).map(|q| q.quote);
+            return quote; //.expect("<missing>");
+        }
+        None
+    }
 }
 
-type Awake = SqliteConnection
-type Recall<'a> = SqliteStatement<'a>;
-type Blueprint<'a> = SqliteResult<Recall<'a>>;
+mod types {
+    use postgres;
 
-type Hostmask = String;
+    pub type Awake = postgres::Connection;
+    //pub type Recall<'conn> = postgres::Statement<'conn>;
+    //pub type Blueprint<'conn> = postgres::Result<Recall<'conn>>;
+
+    pub type Hostmask = String;
+}
 
 mod rq {
-    type Date = String; // :(((((( use rust-chrono?
-    struct Grab {
-        nick: String,
-        added_by: Hostmask,
-        added_at: Date,
-        quote: String,
+    use chrono::{DateTime, UTC};
+    use postgres;
+    use types::*;
+
+    pub struct Grab {
+        pub nick: String,
+        pub added_by: Hostmask,
+        pub added_at: DateTime<UTC>,
+        pub quote: String,
     }
 
-    fn prepare(sql: &Awake) -> Blueprint {
-        sql.prepare("SELECT nick, added_by, date(added_at), quote FROM quotegrabs
-                     WHERE rowid = (abs(random()) % (SELECT MAX(rowid)+1 FROM quotegrabs))")
+    /*
+    pub fn prepare(sql: &Awake) -> Blueprint {
+        sql.prepare("SELECT nick, added_by, added_at, quote FROM quotegrabs
+                     OFFSET random() * (SELECT COUNT(*) FROM quotegrabs) LIMIT 1")
     }
+    */
 
-    fn random_quote(recall: &Recall) -> Option<Grab> {
+    //pub fn random_quote(recall: &Recall) -> Option<Grab> {
+    pub fn random_quote(sql: &Awake) -> Option<Grab> {
 
-        fn attempt() -> SqliteResult<Grab> {
-            let mut rows = try!(recall.query(&[]));
-            // this is wrong; should be graceful if no result
-            let row = try!(rows.next().unwrap());
-            Grab {
-                nick: row.get(0),
-                added_by: row.get(1),
-                added_at: row.get(2),
-                quote: row.get(3),
+
+        let attempt = || -> postgres::Result<Option<Grab>> {
+
+            let recall = sql.prepare(
+                    "SELECT nick, added_by, added_at, quote FROM quotegrabs
+                     OFFSET random() * (SELECT COUNT(*) FROM quotegrabs) LIMIT 1").unwrap();
+
+            let rows = try!(recall.query(&[]));
+            Ok(match rows.iter().next() {
+                Some(row) => {
+                    // use MAP
+                    Some(Grab {
+                        nick: row.get(0),
+                        added_by: row.get(1),
+                        added_at: row.get(2),
+                        quote: row.get(3),
+                    })
+                }
+                None => None
+            })
+        };
+
+        let mut complained = false;
+        let tries = 3;
+        for _attempt in 0..tries {
+            match attempt() {
+                Ok(Some(grab)) => return Some(grab),
+                Ok(None)       => (),
+                Err(e)         => {
+                    complained = true;
+                    println!("random_quote: {}", e)
+                }
             }
         }
-
-        for _attempt in ..3 {
-            match attempt() {
-                Ok(quote) => return Some(quote),
-                Err(e)    => println!("random_quote: {}", e)
-            }
+        if !complained {
+            println!("couldn't get a random quote after {} tries", tries);
         }
         None
     }
@@ -81,16 +136,21 @@ mod rq {
 
 
 struct Brain {
-    _awake: Awake,
-    rq: Recall,
+    sql: types::Awake,
+    //rq: &'a types::Recall<'a>,
 }
 
 impl Brain {
-    pub fn new() -> Brain {
-        let sql = SqliteConnection::open("quotegrabs.sqlite");
+    pub fn load() -> Brain {
+        use postgres::{Connection, SslMode};
+        let url = env::var("DATABASE_URL").unwrap();
+        //.ok().expect("Missing Postgres DATABASE_URL env var!");
+        let sql = Connection::connect(&url[..], &SslMode::None).unwrap();
+
+        //let rq = rq::prepare(sql).unwrap();
         Brain {
-            _awake: sql,
-            rq: rq::prepare(sql).unwrap(),
+            sql: sql,
+            //rq: &rq,
         }
     }
 }
@@ -98,6 +158,8 @@ impl Brain {
 fn main() {
     let host = "irc.opera.com";
     println!("Connecting to {}...", host);
+
+    let brain = Brain::load();
 
     let server = {
         let config = Config {
@@ -130,8 +192,11 @@ fn main() {
 
     let nick = nick.expect("Who am I?").to_string();
     let channel = channel.expect("Where am I?").to_string();
-    let ref mut cantide = Cantide {nick: nick, channel: channel};
-    for msg in server.iter() {
-        cantide.handle(msg.unwrap())
-    }
+    let ref mut cantide = Cantide {
+        brain: brain,
+        channel: channel,
+        irc: server,
+        _nick: nick,
+    };
+    cantide.serve();
 }

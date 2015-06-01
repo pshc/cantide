@@ -4,5 +4,9 @@ version = "0.1.0"
 authors = ["Paul Collier <paul@paulcollier.ca>"]
 
 [dependencies]
+chrono = "0.2"
 irc = "0.8"
-postgres = "0.9"
+
+[dependencies.postgres]
+version = "0.9"
+features = ["chrono"]

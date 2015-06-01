@@ -2,6 +2,7 @@
 name = "cantide"
 version = "0.1.0"
 dependencies = [
+ "chrono 0.2.14 (registry+https://github.com/rust-lang/crates.io-index)",
  "irc 0.8.14 (registry+https://github.com/rust-lang/crates.io-index)",
  "postgres 0.9.1 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
@@ -20,6 +21,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 name = "byteorder"
 version = "0.3.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
+
+[[package]]
+name = "chrono"
+version = "0.2.14"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+dependencies = [
+ "num 0.1.24 (registry+https://github.com/rust-lang/crates.io-index)",
+ "time 0.1.25 (registry+https://github.com/rust-lang/crates.io-index)",
+]
 
 [[package]]
 name = "debug-builders"
@@ -126,6 +136,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "num"
+version = "0.1.24"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+dependencies = [
+ "rand 0.3.8 (registry+https://github.com/rust-lang/crates.io-index)",
+ "rustc-serialize 0.3.14 (registry+https://github.com/rust-lang/crates.io-index)",
+]
+
+[[package]]
 name = "openssl"
 version = "0.6.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -199,6 +218,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 dependencies = [
  "bufstream 0.1.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "byteorder 0.3.10 (registry+https://github.com/rust-lang/crates.io-index)",
+ "chrono 0.2.14 (registry+https://github.com/rust-lang/crates.io-index)",
  "debug-builders 0.1.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "log 0.3.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "phf 0.7.3 (registry+https://github.com/rust-lang/crates.io-index)",
