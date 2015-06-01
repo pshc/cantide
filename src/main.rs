@@ -53,9 +53,17 @@ impl Cantide {
 
     // maybe this ought to just return a &'a str... or call a closure or something?
     fn dispatch(&self, text: &str) -> Option<String> {
+        let rq = || {
+            match rq::random_quote(&self.brain.sql) {
+                Some(grab) => grab.quote,
+                None       => "<<missing>>".to_string()
+            }
+        };
         if text.trim() == "!rq" {
-            let quote = rq::random_quote(&self.brain.sql).map(|q| q.quote);
-            return quote; //.expect("<missing>");
+            return Some(rq());
+        }
+        if text.trim() == "!!rq" {
+            return Some(format!("{} {} {}", rq(), rq(), rq()));
         }
         None
     }
