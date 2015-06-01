@@ -1,0 +1,8 @@
+[package]
+name = "cantide"
+version = "0.1.0"
+authors = ["Paul Collier <paul@paulcollier.ca>"]
+
+[dependencies]
+irc = "0.8"
+postgres = "0.9"
