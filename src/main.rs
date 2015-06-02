@@ -1,6 +1,7 @@
 extern crate chrono;
 extern crate irc;
 extern crate postgres;
+extern crate rand;
 
 use std::env;
 use std::default::Default;
@@ -42,42 +43,86 @@ impl Cantide {
             println!("ok: {:?}", msg);
             let text = msg.suffix.unwrap();
             println!("<{}> {}", nick, text);
-            if let Some(reply) = self.dispatch(&text) {
-                let cmd = Command::PRIVMSG(self.channel.clone(), reply);
-                self.irc.send(cmd).unwrap();
-            }
+            self.respond_to(&text);
         }
         else {
             println!("nopers: {:?}", msg)
         }
     }
 
-    // maybe this ought to just return a &'a str... or call a closure or something?
-    fn dispatch(&self, text: &str) -> Option<String> {
-        let rq = || {
-            match rq::random_quote(&self.brain.sql) {
-                Some(grab) => grab.quote,
-                None       => "<<missing>>".to_string()
-            }
+    fn respond_to(&self, text: &str) {
+        let text = text.trim();
+        if !text.starts_with("!") {
+            return
+        }
+        let words: Vec<&str> = text.split(' ').filter(|&w| !w.is_empty()).collect();
+        let reply = self.dispatch(&words).unwrap_or_else(|e| format!("{}", e));
+        let cmd = Command::PRIVMSG(self.channel.clone(), reply);
+        self.irc.send(cmd).unwrap();
+    }
+
+    fn dispatch(&self, words: &[&str]) -> types::R<String> {
+        let n = words.len();
+        let cmd = words[0];
+        // TEMP should be `let a = words.get(1);` ish
+        let a = if n > 1 { Some(words[1]) } else { None };
+
+        let rq = |nick: Option<&str>| {
+            rq::random_quote(&self.brain.sql, nick).map(|grab| grab.quote)
         };
-        if text.trim() == "!rq" {
-            return Some(rq());
+        match cmd {
+            "!rq"  => rq(a),
+            "!!rq" => Ok(format!("{} {} {}", try!(rq(a)), try!(rq(a)), try!(rq(a)))),
+            _      => Err(types::NoIdea),
         }
-        if text.trim() == "!!rq" {
-            return Some(format!("{} {} {}", rq(), rq(), rq()));
-        }
-        None
     }
 }
 
 mod types {
     use postgres;
+    use rand;
+    use std::fmt;
+    pub use self::Whoops::*;
 
     pub type Awake = postgres::Connection;
     //pub type Recall<'conn> = postgres::Statement<'conn>;
     //pub type Blueprint<'conn> = postgres::Result<Recall<'conn>>;
 
     pub type Hostmask = String;
+
+    pub enum Whoops {
+        NoIdea,
+        NoResult,
+        BrainProblems,
+    }
+
+    pub type R<T> = Result<T, Whoops>;
+
+    impl fmt::Display for Whoops {
+        fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+            f.write_str(match *self {
+                NoIdea => no_idea(),
+                NoResult => "I got nothin'.",
+                BrainProblems => "I got brain problems!",
+            })
+        }
+    }
+
+    impl From<postgres::error::Error> for Whoops {
+        fn from(e: postgres::error::Error) -> Whoops {
+            use std::error::Error;
+            println!("pg: {}", e);
+            if let Some(cause) = e.cause() {
+                println!("cause: {}", cause);
+            }
+            BrainProblems
+        }
+    }
+
+    fn no_idea() -> &'static str {
+        let dunno = ["Huh?", "Don't remember that one.", "What's that?", "Hmm...", "Beats me."];
+        dunno[rand::random::<usize>() % dunno.len()]
+    }
 }
 
 mod rq {
@@ -99,16 +144,30 @@ mod rq {
     }
     */
 
-    //pub fn random_quote(recall: &Recall) -> Option<Grab> {
-    pub fn random_quote(sql: &Awake) -> Option<Grab> {
+    pub fn random_quote(sql: &Awake, nick: Option<&str>) -> R<Grab> {
+        let anyone = nick.is_none();
 
-        // TODO: save this preparation
-        let recall = sql.prepare(
-                "SELECT nick, added_by, added_at, quote FROM quotegrabs
-                 OFFSET random() * (SELECT COUNT(*) FROM quotegrabs) LIMIT 1").unwrap();
+        // TODO: save these preparations?
+        //       use the macros?
+        let recall = try!(sql.prepare(if anyone {
+            "SELECT nick, added_by, added_at, quote FROM quotegrabs
+             OFFSET random() * (SELECT COUNT(*) FROM quotegrabs) LIMIT 1"
+        }
+        else {
+            "SELECT nick, added_by, added_at, quote FROM quotegrabs
+             WHERE lower(nick) = lower($1)
+             ORDER BY random() LIMIT 1" // gah, slow scan, non-uniform to boot!
+        }));
 
         let attempt = || -> postgres::Result<Option<Grab>> {
-            let rows = try!(recall.query(&[]));
+            let rows = try!(if anyone {
+                recall.query(&[])
+            }
+            else {
+                let nick = nick.as_ref().unwrap();
+                recall.query(&[nick])
+            });
+
             Ok(rows.iter().next().map(|row| {
                 Grab {
                     nick: row.get(0),
@@ -119,22 +178,12 @@ mod rq {
             }))
         };
 
-        let tries = 3;
-        let mut complained = false;
-        for _ in 0..tries {
-            match attempt() {
-                Ok(Some(grab)) => return Some(grab),
-                Ok(None)       => (),
-                Err(e)         => {
-                    println!("random_quote: {}", e);
-                    complained = true
-                }
+        for _ in 0..3 {
+            if let Some(grab) = try!(attempt()) {
+                return Ok(grab)
             }
         }
-        if !complained {
-            println!("couldn't get a random quote after {} tries", tries);
-        }
-        None
+        Err(Whoops::NoResult)
     }
 }
 

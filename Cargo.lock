@@ -5,6 +5,7 @@ dependencies = [
  "chrono 0.2.14 (registry+https://github.com/rust-lang/crates.io-index)",
  "irc 0.8.14 (registry+https://github.com/rust-lang/crates.io-index)",
  "postgres 0.9.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "rand 0.3.8 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
 [[package]]
