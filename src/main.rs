@@ -39,6 +39,7 @@ impl Cantide {
         let is_normal_chat = msg.command == "PRIVMSG" && msg.args[0] == self.channel &&
                              msg.suffix.is_some();
         if is_normal_chat {
+            println!("ok: {:?}", msg);
             let text = msg.suffix.unwrap();
             println!("<{}> {}", nick, text);
             if let Some(reply) = self.dispatch(&text) {
@@ -47,7 +48,7 @@ impl Cantide {
             }
         }
         else {
-            println!("{:?}", msg)
+            println!("nopers: {:?}", msg)
         }
     }
 
