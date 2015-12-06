@@ -5,9 +5,9 @@ authors = ["Paul Collier <paul@paulcollier.ca>"]
 
 [dependencies]
 chrono = "0.2"
-irc = "0.8"
+irc = "0.9"
 rand = "0.3"
 
 [dependencies.postgres]
-version = "0.9"
+version = "0.10"
 features = ["chrono"]
