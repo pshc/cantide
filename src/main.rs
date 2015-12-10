@@ -5,8 +5,10 @@ extern crate rand;
 
 use std::env;
 use std::default::Default;
+
 use irc::client::prelude::*;
 use irc::client::server::NetIrcServer;
+
 
 struct Cantide {
     brain: Brain,
@@ -26,14 +28,14 @@ impl Cantide {
         match &msg.command[..] {
             "PING" => return,
             "353" | "366" => return,
-            _ => ()
+            _ => (),
         }
 
         let nick = match msg.get_source_nickname() {
             Some(nick) => nick.to_string(), // is this really necessary?
             None => {
                 println!("n?: {:?}", msg);
-                return
+                return;
             }
         };
 
@@ -44,8 +46,7 @@ impl Cantide {
             let text = msg.suffix.unwrap();
             println!("<{}> {}", nick, text);
             self.respond_to(&text);
-        }
-        else {
+        } else {
             println!("nopers: {:?}", msg)
         }
     }
@@ -53,7 +54,7 @@ impl Cantide {
     fn respond_to(&self, text: &str) {
         let text = text.trim();
         if !text.starts_with("!") {
-            return
+            return;
         }
         let words: Vec<&str> = text.split(' ').filter(|&w| !w.is_empty()).collect();
         let reply = self.dispatch(&words).unwrap_or_else(|e| format!("{}", e));
@@ -62,27 +63,27 @@ impl Cantide {
     }
 
     fn dispatch(&self, words: &[&str]) -> types::R<String> {
-        let n = words.len();
         let cmd = words[0];
-        // TEMP should be `let a = words.get(1);` ish
-        let a = if n > 1 { Some(words[1]) } else { None };
+        let a = words.get(1).map(|&word| word);
 
         let rq = |nick: Option<&str>| {
             rq::random_quote(&self.brain.sql, nick).map(|grab| grab.quote)
         };
         match cmd {
-            "!rq"  => rq(a),
+            "!rq" => rq(a),
             "!!rq" => Ok(format!("{} {} {}", try!(rq(a)), try!(rq(a)), try!(rq(a)))),
-            _      => Err(types::NoIdea),
+            _ => Err(types::NoIdea),
         }
     }
 }
 
 mod types {
+    use std::fmt::{self, Display, Formatter};
+
     use postgres;
     use rand;
-    use std::fmt;
     pub use self::Whoops::*;
+
 
     pub type Awake = postgres::Connection;
     //pub type Recall<'conn> = postgres::Statement<'conn>;
@@ -98,8 +99,8 @@ mod types {
 
     pub type R<T> = Result<T, Whoops>;
 
-    impl fmt::Display for Whoops {
-        fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    impl Display for Whoops {
+        fn fmt(&self, f: &mut Formatter) -> fmt::Result {
             f.write_str(match *self {
                 NoIdea => no_idea(),
                 NoResult => "I got nothin'.",
@@ -130,6 +131,7 @@ mod rq {
     use postgres;
     use types::*;
 
+
     pub struct Grab {
         pub nick: String,
         pub added_by: Hostmask,
@@ -152,8 +154,7 @@ mod rq {
         let recall = try!(sql.prepare(if anyone {
             "SELECT nick, added_by, added_at, quote FROM quotegrabs
              OFFSET random() * (SELECT COUNT(*) FROM quotegrabs) LIMIT 1"
-        }
-        else {
+        } else {
             "SELECT nick, added_by, added_at, quote FROM quotegrabs
              WHERE lower(nick) = lower($1)
              ORDER BY random() LIMIT 1" // gah, slow scan, non-uniform to boot!
@@ -162,8 +163,7 @@ mod rq {
         let attempt = || -> postgres::Result<Option<Grab>> {
             let rows = try!(if anyone {
                 recall.query(&[])
-            }
-            else {
+            } else {
                 let nick = nick.as_ref().unwrap();
                 recall.query(&[nick])
             });
@@ -180,7 +180,7 @@ mod rq {
 
         for _ in 0..3 {
             if let Some(grab) = try!(attempt()) {
-                return Ok(grab)
+                return Ok(grab);
             }
         }
         Err(Whoops::NoResult)
@@ -220,7 +220,7 @@ fn main() {
             alt_nicks: Some(vec!["canti".to_string()]),
             server: Some(host.to_string()),
             channels: Some(vec![channel]),
-            .. Default::default()
+            ..Default::default()
         };
         let server = IrcServer::from_config(config).unwrap();
         server.identify().unwrap();
@@ -236,9 +236,8 @@ fn main() {
         if cmd == "JOIN" {
             nick = msg.get_source_nickname().map(|s| s.to_string());
             channel = msg.suffix.clone();
-            break // motd is over
-        }
-        else if cmd.starts_with("4") || cmd.starts_with("5") {
+            break; // motd is over
+        } else if cmd.starts_with("4") || cmd.starts_with("5") {
             println!("{:?}", msg) // error
         }
     }
