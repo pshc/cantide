@@ -5,6 +5,7 @@ extern crate rand;
 
 use std::env;
 use std::default::Default;
+use std::io;
 
 use irc::client::prelude::*;
 use irc::client::server::NetIrcServer;
@@ -18,16 +19,17 @@ struct Cantide {
 }
 
 impl Cantide {
-    pub fn serve(&self) {
+    pub fn serve(&self) -> io::Result<()> {
         for msg in self.irc.iter() {
-            self.handle(msg.unwrap())
+            try!(self.handle(try!(msg)));
         }
+        Ok(())
     }
 
-    pub fn handle(&self, msg: Message) {
+    pub fn handle(&self, msg: Message) -> io::Result<()> {
         match &msg.command[..] {
-            "PING" => return,
-            "353" | "366" => return,
+            "PING" => return Ok(()),
+            "353" | "366" => return Ok(()),
             _ => (),
         }
 
@@ -35,31 +37,34 @@ impl Cantide {
             Some(nick) => nick.to_string(), // is this really necessary?
             None => {
                 println!("n?: {:?}", msg);
-                return;
+                return Ok(());
             }
         };
 
         let is_normal_chat = msg.command == "PRIVMSG" && msg.args[0] == self.channel &&
                              msg.suffix.is_some();
         if is_normal_chat {
-            println!("ok: {:?}", msg);
-            let text = msg.suffix.unwrap();
-            println!("<{}> {}", nick, text);
-            self.respond_to(&text);
+            if let Some(text) = msg.suffix {
+                println!("<{}> {}", nick, text);
+                try!(self.respond_to(&text));
+            } else {
+                println!("text-less chat?! {:?}", msg);
+            }
         } else {
             println!("nopers: {:?}", msg)
         }
+        Ok(())
     }
 
-    fn respond_to(&self, text: &str) {
+    fn respond_to(&self, text: &str) -> io::Result<()> {
         let text = text.trim();
         if !text.starts_with("!") {
-            return;
+            return Ok(());
         }
         let words: Vec<&str> = text.split(' ').filter(|&w| !w.is_empty()).collect();
         let reply = self.dispatch(&words).unwrap_or_else(|e| format!("{}", e));
         let cmd = Command::PRIVMSG(self.channel.clone(), reply);
-        self.irc.send(cmd).unwrap();
+        self.irc.send(cmd)
     }
 
     fn dispatch(&self, words: &[&str]) -> types::R<String> {
@@ -147,11 +152,9 @@ mod rq {
     */
 
     pub fn random_quote(sql: &Awake, nick: Option<&str>) -> R<Grab> {
-        let anyone = nick.is_none();
-
         // TODO: save these preparations?
         //       use the macros?
-        let recall = try!(sql.prepare(if anyone {
+        let recall = try!(sql.prepare(if nick.is_none() {
             "SELECT nick, added_by, added_at, quote FROM quotegrabs
              OFFSET random() * (SELECT COUNT(*) FROM quotegrabs) LIMIT 1"
         } else {
@@ -161,11 +164,10 @@ mod rq {
         }));
 
         let attempt = || -> postgres::Result<Option<Grab>> {
-            let rows = try!(if anyone {
-                recall.query(&[])
-            } else {
-                let nick = nick.as_ref().unwrap();
+            let rows = try!(if let Some(ref nick) = nick {
                 recall.query(&[nick])
+            } else {
+                recall.query(&[])
             });
 
             Ok(rows.iter().next().map(|row| {
@@ -250,5 +252,5 @@ fn main() {
         irc: server,
         _nick: nick,
     };
-    cantide.serve();
+    cantide.serve().unwrap();
 }
