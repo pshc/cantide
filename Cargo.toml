@@ -1,13 +1,14 @@
 [package]
+authors = ["Paul Collier <paul@paulcollier.ca>"]
 name = "cantide"
 version = "0.1.0"
-authors = ["Paul Collier <paul@paulcollier.ca>"]
 
 [dependencies]
-chrono = "0.2"
-irc = "0.9"
+chrono = "0.3"
+error-chain = "0.10.0"
+irc = "0.12"
 rand = "0.3"
 
 [dependencies.postgres]
-version = "0.10"
-features = ["chrono"]
+features = ["with-chrono"]
+version = "0.14"

@@ -1,73 +1,82 @@
+#![recursion_limit = "1024"]
+
 extern crate chrono;
+#[macro_use]
+extern crate error_chain;
 extern crate irc;
 extern crate postgres;
 extern crate rand;
 
 use std::env;
 use std::default::Default;
-use std::io;
+use std::io::{self, Write};
 
 use irc::client::prelude::*;
-use irc::client::server::NetIrcServer;
+use postgres::{Connection, TlsMode};
 
+use errors::*;
 
 struct Cantide {
     brain: Brain,
     channel: String,
-    irc: NetIrcServer,
-    _nick: String,
+    irc: IrcServer,
 }
 
 impl Cantide {
-    pub fn serve(&self) -> io::Result<()> {
-        for msg in self.irc.iter() {
-            try!(self.handle(try!(msg)));
-        }
-        Ok(())
+    pub fn serve(&self) -> Result<()> {
+        self.irc.for_each_incoming(|msg| {
+            if let Err(e) = self.handle(msg) {
+                let stderr = &mut io::stderr();
+                let oops = "couldn't write to stderr";
+
+                writeln!(stderr, "error: {}", e).expect(oops);
+                for e in e.iter().skip(1) {
+                    writeln!(stderr, "  caused by: {}", e).expect(oops);
+                }
+            }
+        }).map_err(|e| e.into())
     }
 
-    pub fn handle(&self, msg: Message) -> io::Result<()> {
-        match &msg.command[..] {
-            "PING" => return Ok(()),
-            "353" | "366" => return Ok(()),
-            _ => (),
-        }
-
-        let nick = match msg.get_source_nickname() {
-            Some(nick) => nick.to_string(), // is this really necessary?
-            None => {
-                println!("n?: {:?}", msg);
-                return Ok(());
-            }
-        };
-
-        let is_normal_chat = msg.command == "PRIVMSG" && msg.args[0] == self.channel &&
-                             msg.suffix.is_some();
-        if is_normal_chat {
-            if let Some(text) = msg.suffix {
+    pub fn handle(&self, msg: Message) -> Result<()> {
+        match msg.command {
+            Command::JOIN(chan, _, _) => println!("Joined {}", chan),
+            Command::NOTICE(src, msg) => println!("Notice from {}: {:?}", src, msg),
+            Command::PING(_, _) => (),
+            Command::PRIVMSG(ref target, ref text) if target == &self.channel => {
+                let nick = msg.source_nickname().ok_or_else(|| Error::from("nick missing"))?;
                 println!("<{}> {}", nick, text);
-                try!(self.respond_to(&text));
-            } else {
-                println!("text-less chat?! {:?}", msg);
+                self.respond_to(text)?;
             }
-        } else {
-            println!("nopers: {:?}", msg)
+            Command::Response(resp, args, text) => {
+                use irc::proto::response::Response::*;
+                match resp {
+                    RPL_ISUPPORT | RPL_MOTDSTART | RPL_MOTD | RPL_ENDOFMOTD => (),
+                    r => {
+                        match text {
+                            Some(text) => println!("> {:?} {:?} {}", r, args, text),
+                            None => println!("> {:?} {:?}", r, args),
+                        }
+                    }
+                }
+            }
+            c => println!("? {:?}", c),
         }
         Ok(())
     }
 
-    fn respond_to(&self, text: &str) -> io::Result<()> {
+    fn respond_to(&self, text: &str) -> Result<()> {
         let text = text.trim();
         if !text.starts_with("!") {
             return Ok(());
         }
         let words: Vec<&str> = text.split(' ').filter(|&w| !w.is_empty()).collect();
-        let reply = self.dispatch(&words).unwrap_or_else(|e| format!("{}", e));
+        let reply = self.dispatch(&words).unwrap_or_else(errors::have_a_cow);
         let cmd = Command::PRIVMSG(self.channel.clone(), reply);
         self.irc.send(cmd)
+            .chain_err(|| format!("couldn't respond to {:?}", text))
     }
 
-    fn dispatch(&self, words: &[&str]) -> types::R<String> {
+    fn dispatch(&self, words: &[&str]) -> Result<String> {
         let cmd = words[0];
         let a = words.get(1).map(|&word| word);
 
@@ -76,52 +85,30 @@ impl Cantide {
         };
         match cmd {
             "!rq" => rq(a),
-            "!!rq" => Ok(format!("{} {} {}", try!(rq(a)), try!(rq(a)), try!(rq(a)))),
-            _ => Err(types::NoIdea),
+            "!!rq" => Ok(format!("{} {} {}", rq(a)?, rq(a)?, rq(a)?)),
+            _ => Err(ErrorKind::NoIdea.into()),
         }
     }
 }
 
-mod types {
-    use std::fmt::{self, Display, Formatter};
-
+mod errors {
+    use irc;
     use postgres;
     use rand;
-    pub use self::Whoops::*;
 
-
-    pub type Awake = postgres::Connection;
-    //pub type Recall<'conn> = postgres::Statement<'conn>;
-    //pub type Blueprint<'conn> = postgres::Result<Recall<'conn>>;
-
-    pub type Hostmask = String;
-
-    pub enum Whoops {
-        NoIdea,
-        NoResult,
-        BrainProblems,
-    }
-
-    pub type R<T> = Result<T, Whoops>;
-
-    impl Display for Whoops {
-        fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-            f.write_str(match *self {
-                NoIdea => no_idea(),
-                NoResult => "I got nothin'.",
-                BrainProblems => "I got brain problems!",
-            })
+    error_chain! {
+        errors { NoIdea NoResult }
+        foreign_links {
+            Irc(irc::error::Error);
+            Postgres(postgres::error::Error);
         }
     }
 
-    impl From<postgres::error::Error> for Whoops {
-        fn from(e: postgres::error::Error) -> Whoops {
-            use std::error::Error;
-            println!("pg: {}", e);
-            if let Some(cause) = e.cause() {
-                println!("cause: {}", cause);
-            }
-            BrainProblems
+    pub fn have_a_cow<'a>(e: Error) -> String {
+        match e {
+            Error(ErrorKind::NoIdea, _) => no_idea().into(),
+            Error(ErrorKind::NoResult, _) => "I got nothin'.".into(),
+            e => format!("{}", e),
         }
     }
 
@@ -133,9 +120,8 @@ mod types {
 
 mod rq {
     use chrono::{DateTime, UTC};
-    use postgres;
-    use types::*;
-
+    use postgres::{self, Connection};
+    use errors::*;
 
     pub struct Grab {
         pub nick: String,
@@ -144,31 +130,33 @@ mod rq {
         pub quote: String,
     }
 
+    type Hostmask = String;
+
     /*
-    pub fn prepare(sql: &Awake) -> Blueprint {
+    pub fn prepare(sql: &Connection) -> Blueprint {
         sql.prepare("SELECT nick, added_by, added_at, quote FROM quotegrabs
                      OFFSET random() * (SELECT COUNT(*) FROM quotegrabs) LIMIT 1")
     }
     */
 
-    pub fn random_quote(sql: &Awake, nick: Option<&str>) -> R<Grab> {
+    pub fn random_quote(sql: &Connection, nick: Option<&str>) -> Result<Grab> {
         // TODO: save these preparations?
         //       use the macros?
-        let recall = try!(sql.prepare(if nick.is_none() {
+        let recall = sql.prepare(if nick.is_none() {
             "SELECT nick, added_by, added_at, quote FROM quotegrabs
              OFFSET random() * (SELECT COUNT(*) FROM quotegrabs) LIMIT 1"
         } else {
             "SELECT nick, added_by, added_at, quote FROM quotegrabs
              WHERE lower(nick) = lower($1)
              ORDER BY random() LIMIT 1" // gah, slow scan, non-uniform to boot!
-        }));
+        })?;
 
         let attempt = || -> postgres::Result<Option<Grab>> {
-            let rows = try!(if let Some(ref nick) = nick {
-                recall.query(&[nick])
+            let rows = if let Some(ref nick) = nick {
+                recall.query(&[nick])?
             } else {
-                recall.query(&[])
-            });
+                recall.query(&[])?
+            };
 
             Ok(rows.iter().next().map(|row| {
                 Grab {
@@ -181,25 +169,23 @@ mod rq {
         };
 
         for _ in 0..3 {
-            if let Some(grab) = try!(attempt()) {
+            if let Some(grab) = attempt()? {
                 return Ok(grab);
             }
         }
-        Err(Whoops::NoResult)
+        Err(ErrorKind::NoResult.into())
     }
 }
 
-
 struct Brain {
-    sql: types::Awake,
+    sql: Connection,
     //rq: &'a types::Recall<'a>,
 }
 
 impl Brain {
     pub fn load() -> Brain {
-        use postgres::{Connection, SslMode};
         let url = env::var("DATABASE_URL").ok().expect("Missing DATABASE_URL");
-        let sql = Connection::connect(&url[..], &SslMode::None).unwrap();
+        let sql = Connection::connect(&url[..], TlsMode::None).unwrap();
 
         //let rq = rq::prepare(sql).unwrap();
         Brain {
@@ -221,7 +207,7 @@ fn main() {
             nickname: Some("cantide".to_string()),
             alt_nicks: Some(vec!["canti".to_string()]),
             server: Some(host.to_string()),
-            channels: Some(vec![channel]),
+            channels: Some(vec![channel.clone()]),
             ..Default::default()
         };
         let server = IrcServer::from_config(config).unwrap();
@@ -229,28 +215,20 @@ fn main() {
         server
     };
 
-    // wait until joined
-    let mut nick = None;
-    let mut channel = None;
-    for m in server.iter() {
-        let msg = m.unwrap();
-        let ref cmd = msg.command;
-        if cmd == "JOIN" {
-            nick = msg.get_source_nickname().map(|s| s.to_string());
-            channel = msg.suffix.clone();
-            break; // motd is over
-        } else if cmd.starts_with("4") || cmd.starts_with("5") {
-            println!("{:?}", msg) // error
-        }
-    }
-
-    let nick = nick.expect("Who am I?").to_string();
-    let channel = channel.expect("Where am I?").to_string();
     let ref mut cantide = Cantide {
         brain: brain,
         channel: channel,
         irc: server,
-        _nick: nick,
     };
-    cantide.serve().unwrap();
+
+    if let Err(e) = cantide.serve() {
+        let stderr = &mut io::stderr();
+        let oops = "couldn't write to stderr";
+
+        writeln!(stderr, "fatal error: {}", e).expect(oops);
+        for e in e.iter().skip(1) {
+            writeln!(stderr, "  caused by: {}", e).expect(oops);
+        }
+        std::process::exit(1);
+    }
 }
