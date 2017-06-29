@@ -9,6 +9,7 @@ extern crate rand;
 use std::env;
 use std::default::Default;
 use std::io::{self, Write};
+use std::sync::Mutex;
 
 use irc::client::prelude::*;
 use postgres::{Connection, TlsMode};
@@ -16,7 +17,7 @@ use postgres::{Connection, TlsMode};
 use errors::*;
 
 struct Cantide {
-    brain: Brain,
+    brain: Mutex<Brain>,
     channel: String,
     irc: IrcServer,
 }
@@ -39,6 +40,10 @@ impl Cantide {
     pub fn handle(&self, msg: Message) -> Result<()> {
         match msg.command {
             Command::JOIN(chan, _, _) => println!("Joined {}", chan),
+            Command::NICK(nick) => {
+                println!("My nick changed to: {}", nick);
+                self.brain.lock().unwrap().nick = nick;
+            }
             Command::NOTICE(src, msg) => println!("Notice from {}: {:?}", src, msg),
             Command::PING(_, _) => (),
             Command::PRIVMSG(ref target, ref text) if target == &self.channel => {
@@ -50,6 +55,13 @@ impl Cantide {
                 use irc::proto::response::Response::*;
                 match resp {
                     RPL_ISUPPORT | RPL_MOTDSTART | RPL_MOTD | RPL_ENDOFMOTD => (),
+                    RPL_WELCOME => {
+                        if args.len() == 1 {
+                            let nick = args[0].clone();
+                            println!("My nick: {}", nick);
+                            self.brain.lock().unwrap().nick = nick;
+                        }
+                    }
                     r => {
                         match text {
                             Some(text) => println!("> {:?} {:?} {}", r, args, text),
@@ -69,36 +81,12 @@ impl Cantide {
             return Ok(());
         }
         let words: Vec<&str> = text.split(' ').filter(|&w| !w.is_empty()).collect();
-        let reply = self.dispatch(&words).unwrap_or_else(errors::have_a_cow);
-        println!("< {}", reply);
+        let brain = self.brain.lock().expect("brain poisoning");
+        let reply = brain.dispatch(&words).unwrap_or_else(errors::have_a_cow);
+        println!("<{}> {}", brain.nick, reply);
         let cmd = Command::PRIVMSG(self.channel.clone(), reply);
         self.irc.send(cmd)
             .chain_err(|| format!("couldn't respond to {:?}", text))
-    }
-
-    fn dispatch(&self, words: &[&str]) -> Result<String> {
-        let cmd = words[0];
-        let a = words.get(1).map(|&word| word);
-
-        let rq = |nick: Option<&str>| {
-            rq::random_quote(&self.brain.sql, nick).map(|quote| {
-                if quote.starts_with('<') && quote.contains('>') {
-                    let skip = quote.find('>').unwrap() + 2;
-                    format!("◇ {}", &quote[skip..])
-                } else if quote.starts_with("* ") {
-                    let skip = quote[2..].find(' ').unwrap() + 3;
-                    let actor = if rand::random() { "💃" } else { "🕺" };
-                    format!("{} {}", actor, &quote[skip..])
-                } else {
-                    quote
-                }
-            })
-        };
-        match cmd {
-            "!rq" => rq(a),
-            "!!rq" => Ok(format!("{} {} {}", rq(a)?, rq(a)?, rq(a)?)),
-            _ => Err(ErrorKind::NoIdea.into()),
-        }
     }
 }
 
@@ -163,13 +151,40 @@ mod rq {
 
 struct Brain {
     sql: Connection,
+    nick: String,
 }
 
 impl Brain {
     pub fn load() -> Brain {
         let url = env::var("DATABASE_URL").ok().expect("Missing DATABASE_URL");
         let sql = Connection::connect(&url[..], TlsMode::None).unwrap();
-        Brain { sql }
+        let nick = "cantide".into();
+        Brain { sql, nick }
+    }
+
+    fn dispatch(&self, words: &[&str]) -> Result<String> {
+        let cmd = words[0];
+        let a = words.get(1).map(|&word| word);
+
+        let rq = |nick: Option<&str>| {
+            rq::random_quote(&self.sql, nick).map(|quote| {
+                if quote.starts_with('<') && quote.contains('>') {
+                    let skip = quote.find('>').unwrap() + 2;
+                    format!("◇ {}", &quote[skip..])
+                } else if quote.starts_with("* ") {
+                    let skip = quote[2..].find(' ').unwrap() + 3;
+                    let actor = if rand::random() { "💃" } else { "🕺" };
+                    format!("{} {}", actor, &quote[skip..])
+                } else {
+                    quote
+                }
+            })
+        };
+        match cmd {
+            "!rq" => rq(a),
+            "!!rq" => Ok(format!("{} {} {}", rq(a)?, rq(a)?, rq(a)?)),
+            _ => Err(ErrorKind::NoIdea.into()),
+        }
     }
 }
 
@@ -182,7 +197,7 @@ fn main() {
 
     let server = {
         let config = Config {
-            nickname: Some("cantide".to_string()),
+            nickname: Some(brain.nick.clone()),
             alt_nicks: Some(vec!["canti".to_string()]),
             server: Some(host.to_string()),
             channels: Some(vec![channel.clone()]),
@@ -194,8 +209,8 @@ fn main() {
     };
 
     let ref mut cantide = Cantide {
-        brain: brain,
-        channel: channel,
+        brain: Mutex::new(brain),
+        channel,
         irc: server,
     };
 
