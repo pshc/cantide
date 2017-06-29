@@ -133,30 +133,20 @@ mod rq {
     use postgres::{self, Connection};
     use errors::*;
 
-    /*
-    pub fn prepare(sql: &Connection) -> Blueprint {
-        sql.prepare("SELECT nick, added_by, added_at, quote FROM quotegrabs
-                     OFFSET random() * (SELECT COUNT(*) FROM quotegrabs) LIMIT 1")
-    }
-    */
-
     pub fn random_quote(sql: &Connection, nick: Option<&str>) -> Result<String> {
-        // TODO: save these preparations?
-        //       use the macros?
-        let recall = sql.prepare(if nick.is_none() {
-            "SELECT quote FROM quotegrabs
-             OFFSET random() * (SELECT COUNT(*) FROM quotegrabs) LIMIT 1"
-        } else {
-            "SELECT quote FROM quotegrabs
-             WHERE lower(nick) = lower($1)
-             ORDER BY random() LIMIT 1" // gah, slow scan, non-uniform to boot!
-        })?;
 
         let attempt = || -> postgres::Result<Option<String>> {
             let rows = if let Some(ref nick) = nick {
-                recall.query(&[nick])?
+                sql.query(
+                    "SELECT quote FROM quotegrabs
+                     WHERE lower(nick) = lower($1)
+                     ORDER BY random() LIMIT 1", // gah, slow scan, non-uniform to boot!
+                    &[nick])?
             } else {
-                recall.query(&[])?
+                sql.query(
+                    "SELECT quote FROM quotegrabs
+                     OFFSET random() * (SELECT COUNT(*) FROM quotegrabs) LIMIT 1",
+                    &[])?
             };
 
             Ok(rows.iter().next().map(|row| row.get(0)))
@@ -173,19 +163,13 @@ mod rq {
 
 struct Brain {
     sql: Connection,
-    //rq: &'a types::Recall<'a>,
 }
 
 impl Brain {
     pub fn load() -> Brain {
         let url = env::var("DATABASE_URL").ok().expect("Missing DATABASE_URL");
         let sql = Connection::connect(&url[..], TlsMode::None).unwrap();
-
-        //let rq = rq::prepare(sql).unwrap();
-        Brain {
-            sql: sql,
-            //rq: &rq,
-        }
+        Brain { sql }
     }
 }
 
