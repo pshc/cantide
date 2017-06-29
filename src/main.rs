@@ -39,17 +39,39 @@ impl Cantide {
 
     pub fn handle(&self, msg: Message) -> Result<()> {
         match msg.command {
-            Command::JOIN(chan, _, _) => println!("Joined {}", chan),
+            Command::JOIN(ref chan, _, _) if chan == &self.channel => {
+                if let Some(nick) = msg.source_nickname() {
+                    println!("* {} joined {}", nick, chan);
+                }
+            }
             Command::NICK(nick) => {
                 println!("My nick changed to: {}", nick);
                 self.brain.lock().unwrap().nick = nick;
             }
             Command::NOTICE(src, msg) => println!("Notice from {}: {:?}", src, msg),
+            Command::PART(ref chan, ref part_msg) if chan == &self.channel => {
+                if let Some(nick) = msg.source_nickname() {
+                    if let &Some(ref bye) = part_msg {
+                        println!("* {} left {} ({})", nick, chan, bye);
+                    } else {
+                        println!("* {} left {}", nick, chan);
+                    }
+                }
+            }
             Command::PING(_, _) => (),
             Command::PRIVMSG(ref target, ref text) if target == &self.channel => {
                 let nick = msg.source_nickname().ok_or_else(|| Error::from("nick missing"))?;
                 println!("<{}> {}", nick, text);
                 self.respond_to(text)?;
+            }
+            Command::QUIT(ref quit_msg) => {
+                if let Some(nick) = msg.source_nickname() {
+                    if let &Some(ref bye) = quit_msg {
+                        println!("* {} quit ({})", nick, bye);
+                    } else {
+                        println!("* {} quit", nick);
+                    }
+                }
             }
             Command::Response(resp, args, text) => {
                 use irc::proto::response::Response::*;
