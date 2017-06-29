@@ -1,6 +1,5 @@
 #![recursion_limit = "1024"]
 
-extern crate chrono;
 #[macro_use]
 extern crate error_chain;
 extern crate irc;
@@ -71,6 +70,7 @@ impl Cantide {
         }
         let words: Vec<&str> = text.split(' ').filter(|&w| !w.is_empty()).collect();
         let reply = self.dispatch(&words).unwrap_or_else(errors::have_a_cow);
+        println!("< {}", reply);
         let cmd = Command::PRIVMSG(self.channel.clone(), reply);
         self.irc.send(cmd)
             .chain_err(|| format!("couldn't respond to {:?}", text))
@@ -81,7 +81,18 @@ impl Cantide {
         let a = words.get(1).map(|&word| word);
 
         let rq = |nick: Option<&str>| {
-            rq::random_quote(&self.brain.sql, nick).map(|grab| grab.quote)
+            rq::random_quote(&self.brain.sql, nick).map(|quote| {
+                if quote.starts_with('<') && quote.contains('>') {
+                    let skip = quote.find('>').unwrap() + 2;
+                    format!("◇ {}", &quote[skip..])
+                } else if quote.starts_with("* ") {
+                    let skip = quote[2..].find(' ').unwrap() + 3;
+                    let actor = if rand::random() { "💃" } else { "🕺" };
+                    format!("{} {}", actor, &quote[skip..])
+                } else {
+                    quote
+                }
+            })
         };
         match cmd {
             "!rq" => rq(a),
@@ -119,18 +130,8 @@ mod errors {
 }
 
 mod rq {
-    use chrono::{DateTime, UTC};
     use postgres::{self, Connection};
     use errors::*;
-
-    pub struct Grab {
-        pub nick: String,
-        pub added_by: Hostmask,
-        pub added_at: DateTime<UTC>,
-        pub quote: String,
-    }
-
-    type Hostmask = String;
 
     /*
     pub fn prepare(sql: &Connection) -> Blueprint {
@@ -139,33 +140,26 @@ mod rq {
     }
     */
 
-    pub fn random_quote(sql: &Connection, nick: Option<&str>) -> Result<Grab> {
+    pub fn random_quote(sql: &Connection, nick: Option<&str>) -> Result<String> {
         // TODO: save these preparations?
         //       use the macros?
         let recall = sql.prepare(if nick.is_none() {
-            "SELECT nick, added_by, added_at, quote FROM quotegrabs
+            "SELECT quote FROM quotegrabs
              OFFSET random() * (SELECT COUNT(*) FROM quotegrabs) LIMIT 1"
         } else {
-            "SELECT nick, added_by, added_at, quote FROM quotegrabs
+            "SELECT quote FROM quotegrabs
              WHERE lower(nick) = lower($1)
              ORDER BY random() LIMIT 1" // gah, slow scan, non-uniform to boot!
         })?;
 
-        let attempt = || -> postgres::Result<Option<Grab>> {
+        let attempt = || -> postgres::Result<Option<String>> {
             let rows = if let Some(ref nick) = nick {
                 recall.query(&[nick])?
             } else {
                 recall.query(&[])?
             };
 
-            Ok(rows.iter().next().map(|row| {
-                Grab {
-                    nick: row.get(0),
-                    added_by: row.get(1),
-                    added_at: row.get(2),
-                    quote: row.get(3),
-                }
-            }))
+            Ok(rows.iter().next().map(|row| row.get(0)))
         };
 
         for _ in 0..3 {
